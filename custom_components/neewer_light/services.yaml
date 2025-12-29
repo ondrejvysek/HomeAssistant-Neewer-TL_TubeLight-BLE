@@ -1,0 +1,10 @@
+# Example services for Neewer Tube Light integration
+# These services can be used to control advanced features
+
+# Example: Turn on light with specific settings
+# service: light.turn_on
+# target:
+#   entity_id: light.neewer_tube_light
+# data:
+#   brightness: 255
+#   rgb_color: [255, 0, 0]

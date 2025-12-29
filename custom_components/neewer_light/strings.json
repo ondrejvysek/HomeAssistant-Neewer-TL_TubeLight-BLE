@@ -1,0 +1,30 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Set up Neewer Tube Light",
+        "description": "Configure your Neewer tube light device",
+        "data": {
+          "name": "Device Name",
+          "device_id": "Device ID (MAC Address)",
+          "model": "Light Model"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to device",
+      "unknown": "Unexpected error occurred"
+    },
+    "abort": {
+      "already_configured": "Device is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Neewer Tube Light Options",
+        "description": "Configure options for your Neewer tube light"
+      }
+    }
+  }
+}
