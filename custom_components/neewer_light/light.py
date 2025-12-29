@@ -62,7 +62,7 @@ class NeewerTubeLight(LightEntity):
         self._name = name
         self._config_entry = config_entry
         self._attr_unique_id = f"{device_id}_light"
-        
+
         # Set supported features based on model
         if model == MODEL_TL60_RGB:
             self._attr_supported_color_modes = {ColorMode.RGB}
@@ -111,16 +111,16 @@ class NeewerTubeLight(LightEntity):
 
         # Send command to ESPHome device
         await self._send_command()
-        
+
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         """Turn off the light."""
         self._attr_is_on = False
-        
+
         # Send command to ESPHome device
         await self._send_command()
-        
+
         self.async_write_ha_state()
 
     async def _send_command(self) -> None:
@@ -130,7 +130,7 @@ class NeewerTubeLight(LightEntity):
         # 1. Get the ESPHome device from the registry
         # 2. Send BLE commands through ESPHome's BLE proxy
         # 3. Format commands according to Neewer protocol
-        
+
         _LOGGER.debug(
             "Sending command: power=%s, brightness=%s, rgb=%s, color_temp=%s",
             self._attr_is_on,
@@ -138,7 +138,7 @@ class NeewerTubeLight(LightEntity):
             self._attr_rgb_color,
             self._attr_color_temp,
         )
-        
+
         # Placeholder for actual BLE communication through ESPHome
         # The actual implementation would use the ESPHome API:
         # - Call esphome API to send BLE write commands
