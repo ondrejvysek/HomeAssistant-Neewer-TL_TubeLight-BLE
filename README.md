@@ -78,7 +78,7 @@ esp32_ble_tracker:
     window: 1100ms
 
 # Remote packages from GitHub (same file can be included multiple times with different vars)
-# This is the correct way to reference a GitHub YAML file (no /config/esphome/... local path). :contentReference[oaicite:1]{index=1}
+# This is the correct way to reference a GitHub YAML file (no /config/esphome/... local path).
 packages:
   neewer_tubes:
     url: https://github.com/ondrejvysek/HomeAssistant-Neewer-TL_TubeLight-BLE
