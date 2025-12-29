@@ -32,7 +32,7 @@ You get the standard HA UI, including the **color picker**, brightness slider, a
 
 ### Example YAML
 
-Recommended number of the BLE devices is 3
+Recommended max number of the BLE devices is 3
 
 ```yaml
 # neewer-atom-sample.yaml
