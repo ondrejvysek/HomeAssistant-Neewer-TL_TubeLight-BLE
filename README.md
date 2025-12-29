@@ -19,7 +19,7 @@ You get the standard HA UI, including the **color picker**, brightness slider, a
 ## Requirements
 
 - Home Assistant with the ESPHome add-on (or ESPHome CLI)
-- An ESP32 device supported by ESPHome (example: M5Stack Atom)
+- An ESP32 device supported by ESPHome (example: M5Stack Atom Lite https://shop.m5stack.com/products/atom-lite-esp32-development-kit)
 - Neewer TL tube(s) reachable over BLE
 
 ## Installation (ESPHome YAML)
