@@ -32,15 +32,81 @@ You get the standard HA UI, including the **color picker**, brightness slider, a
 
 ### Example YAML
 
-Use `external_components` so ESPHome pulls the component directly from this GitHub repo:
+Recommended number of the BLE devices is 3
 
 ```yaml
-external_components:
-  - source:
-      type: git
-      url: https://github.com/ondrejvysek/HomeAssistant-Neewer-TL_TubeLight-BLE
-      ref: main
-    components: [neewer_tl_tube_ble]
+# neewer-atom-sample.yaml
+substitutions:
+  name: neewer-atom-ble
+  friendly_name: Neewer Atom BLE
+
+  # Neewer BLE GATT (from your sniff)
+  neewer_service_uuid: "69400001-B5A3-F393-E0A9-E50E24DCCA99"
+  neewer_char_uuid_cmd: "69400002-B5A3-F393-E0A9-E50E24DCCA99"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: m5stack-atom
+  framework:
+    type: arduino
+
+logger:
+  level: DEBUG
+
+api:
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: "12345678"
+
+captive_portal:
+web_server:
+
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+    interval: 1100ms
+    window: 1100ms
+
+# Remote packages from GitHub (same file can be included multiple times with different vars)
+# This is the correct way to reference a GitHub YAML file (no /config/esphome/... local path). :contentReference[oaicite:1]{index=1}
+packages:
+  neewer_tubes:
+    url: https://github.com/ondrejvysek/HomeAssistant-Neewer-TL_TubeLight-BLE
+    ref: main
+    files:
+      - path: components/neewer_atom_tube/neewer_atom_tube.yaml
+        vars:
+          dev_id: tube1
+          dev_name: "Tube 1"
+          dev_mac: "XX:XX:XX:XX:XX:XX"
+          service_uuid: ${neewer_service_uuid}
+          char_uuid: ${neewer_char_uuid_cmd}
+
+      - path: components/neewer_atom_tube/neewer_atom_tube.yaml
+        vars:
+          dev_id: tube2
+          dev_name: "Tube 2"
+          dev_mac: "XX:XX:XX:XX:XX:XX"
+          service_uuid: ${neewer_service_uuid}
+          char_uuid: ${neewer_char_uuid_cmd}
+
+      - path: components/neewer_atom_tube/neewer_atom_tube.yaml
+        vars:
+          dev_id: tube3
+          dev_name: "Tube 3"
+          dev_mac: "XX:XX:XX:XX:XX:XX"
+          service_uuid: ${neewer_service_uuid}
+          char_uuid: ${neewer_char_uuid_cmd}
 ```
 ### Control all lights together
 
