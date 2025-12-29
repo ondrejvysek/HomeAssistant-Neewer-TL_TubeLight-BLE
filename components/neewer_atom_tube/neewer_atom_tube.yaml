@@ -208,11 +208,11 @@ script:
                   lambda: |-
                     return id(${dev_id}_force_resend_color);
                 then:
-                  - script.execute: ${dev_id}_send_brightness
-                  - delay: 90ms
                   - script.execute: ${dev_id}_send_color
                   - lambda: |-
                       id(${dev_id}_force_resend_color) = false;
+                  - delay: 90ms
+                  - script.execute: ${dev_id}_send_brightness                    
                 else:
                   # běžné změny: color jen když se změnil
                   - if:
