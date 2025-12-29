@@ -42,6 +42,15 @@ external_components:
       ref: main
     components: [neewer_tl_tube_ble]
 ```
+### Control all lights together
+
+Create HomeAssistant group (https://www.home-assistant.io/integrations/group/)
+- Browse to your Home Assistant instance.
+- Go to  Settings > Devices & Services.
+- At the top of the screen, select the tab: Helpers.
+- In the bottom right corner, select the  Create helper button.
+- From the list, select Group.
+- Follow the instructions on screen to complete the setup.
 
 ## Finding the BLE MAC address (BLE Scanner)
 
