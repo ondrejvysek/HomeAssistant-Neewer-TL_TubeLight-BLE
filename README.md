@@ -84,7 +84,7 @@ packages:
     url: https://github.com/ondrejvysek/HomeAssistant-Neewer-TL_TubeLight-BLE
     ref: main
     files:
-      - path: components/neewer_atom_tube/neewer_atom_tube.yaml
+      - path: neewer_tl_tube.yaml
         vars:
           dev_id: tube1
           dev_name: "Tube 1"
@@ -92,7 +92,7 @@ packages:
           service_uuid: ${neewer_service_uuid}
           char_uuid: ${neewer_char_uuid_cmd}
 
-      - path: components/neewer_atom_tube/neewer_atom_tube.yaml
+      - path: neewer_tl_tube.yaml
         vars:
           dev_id: tube2
           dev_name: "Tube 2"
@@ -100,7 +100,7 @@ packages:
           service_uuid: ${neewer_service_uuid}
           char_uuid: ${neewer_char_uuid_cmd}
 
-      - path: components/neewer_atom_tube/neewer_atom_tube.yaml
+      - path: neewer_tl_tube.yaml
         vars:
           dev_id: tube3
           dev_name: "Tube 3"
