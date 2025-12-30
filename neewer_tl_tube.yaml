@@ -1,0 +1,385 @@
+# components/neewer_atom_tube/neewer_atom_tube.yaml
+# Simplified to RGB only for Home Assistant
+# We still send the tube's RGBWW BLE frame, but force CW/WW to 0 every time.
+# Dimming is done by scaling RGB values using ESPHome's brightness.
+
+substitutions:
+  # expected vars from remote package include:
+  # dev_id, dev_name, dev_mac, service_uuid, char_uuid
+
+ble_client:
+  - id: ${dev_id}_client
+    mac_address: ${dev_mac}
+    on_connect:
+      then:
+        - script.execute: ${dev_id}_init
+
+globals:
+  # last EFFECTIVE values we want to send (already includes brightness)
+  - id: ${dev_id}_last_r
+    type: uint8_t
+    restore_value: true
+    initial_value: "0"
+  - id: ${dev_id}_last_g
+    type: uint8_t
+    restore_value: true
+    initial_value: "0"
+  - id: ${dev_id}_last_b
+    type: uint8_t
+    restore_value: true
+    initial_value: "0"
+
+  # what we already sent (dedup)
+  - id: ${dev_id}_sent_r
+    type: uint8_t
+    restore_value: false
+    initial_value: "255"
+  - id: ${dev_id}_sent_g
+    type: uint8_t
+    restore_value: false
+    initial_value: "255"
+  - id: ${dev_id}_sent_b
+    type: uint8_t
+    restore_value: false
+    initial_value: "255"
+
+  # raw (unscaled) RGB tracking to guard against "snap to white" when only brightness changes
+  - id: ${dev_id}_raw_r
+    type: float
+    restore_value: true
+    initial_value: "1.0"
+  - id: ${dev_id}_raw_g
+    type: float
+    restore_value: true
+    initial_value: "1.0"
+  - id: ${dev_id}_raw_b
+    type: float
+    restore_value: true
+    initial_value: "1.0"
+  - id: ${dev_id}_prev_bri
+    type: float
+    restore_value: false
+    initial_value: "1.0"
+
+  # state tracking
+  - id: ${dev_id}_is_on
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: ${dev_id}_was_on
+    type: bool
+    restore_value: false
+    initial_value: "false"
+  - id: ${dev_id}_force_resend
+    type: bool
+    restore_value: false
+    initial_value: "false"
+
+output:
+  # dummy outputs only to satisfy rgb platform
+  - platform: template
+    id: ${dev_id}_out_r
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+  - platform: template
+    id: ${dev_id}_out_g
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+  - platform: template
+    id: ${dev_id}_out_b
+    type: float
+    write_action:
+      - lambda: |-
+          (void) state;
+
+light:
+  - platform: rgb
+    name: "${dev_name}"
+    id: ${dev_id}_light
+    red: ${dev_id}_out_r
+    green: ${dev_id}_out_g
+    blue: ${dev_id}_out_b
+    gamma_correct: 1.0
+    restore_mode: RESTORE_DEFAULT_OFF
+    default_transition_length: 0s
+
+    on_state:
+      then:
+        - lambda: |-
+            auto cv = id(${dev_id}_light).current_values;
+
+            bool now_on = cv.is_on();
+            bool prev_on = id(${dev_id}_was_on);
+            id(${dev_id}_was_on) = now_on;
+            id(${dev_id}_is_on) = now_on;
+
+            // Brightness scalar (0..1)
+            float bri = cv.get_brightness();
+
+            // Raw RGB (0..1). These are NOT scaled by brightness.
+            float r_raw = cv.get_red();
+            float g_raw = cv.get_green();
+            float b_raw = cv.get_blue();
+
+            // Guard: some transitions / controller events can "snap" RGB to white when only brightness changes.
+            bool prev_rgb_nonwhite =
+              (fabsf(id(${dev_id}_raw_r) - id(${dev_id}_raw_g)) > 0.02f) ||
+              (fabsf(id(${dev_id}_raw_r) - id(${dev_id}_raw_b)) > 0.02f);
+
+            bool snapped_to_white =
+              (r_raw > 0.98f && g_raw > 0.98f && b_raw > 0.98f);
+
+            bool brightness_changed = fabsf(bri - id(${dev_id}_prev_bri)) > 0.001f;
+
+            bool suspect_white_reset = prev_on && now_on && brightness_changed && prev_rgb_nonwhite && snapped_to_white;
+
+            if (suspect_white_reset) {
+              r_raw = id(${dev_id}_raw_r);
+              g_raw = id(${dev_id}_raw_g);
+              b_raw = id(${dev_id}_raw_b);
+            } else {
+              id(${dev_id}_raw_r) = r_raw;
+              id(${dev_id}_raw_g) = g_raw;
+              id(${dev_id}_raw_b) = b_raw;
+            }
+
+            id(${dev_id}_prev_bri) = bri;
+
+            // Scale exactly like ESPHome RGB: effective = raw * brightness
+            float r_f = now_on ? (r_raw * bri) : 0.0f;
+            float g_f = now_on ? (g_raw * bri) : 0.0f;
+            float b_f = now_on ? (b_raw * bri) : 0.0f;
+
+            auto clamp255 = [](float v) -> uint8_t {
+              if (v <= 0.0f) return 0;
+              if (v >= 1.0f) return 255;
+              return (uint8_t) lroundf(v * 255.0f);
+            };
+
+            uint8_t r = clamp255(r_f);
+            uint8_t g = clamp255(g_f);
+            uint8_t b = clamp255(b_f);
+
+            ESP_LOGD("neewer_${dev_id}",
+                     "STATE on=%d bri=%.3f raw=(%.3f %.3f %.3f) suspect=%d eff=(%u %u %u)",
+                     (int) now_on, bri,
+                     r_raw, g_raw, b_raw,
+                     (int) suspect_white_reset,
+                     r, g, b);
+
+            // Keep last color even when turning OFF (so we can restore fast on ON).
+            if (now_on) {
+              id(${dev_id}_last_r) = r;
+              id(${dev_id}_last_g) = g;
+              id(${dev_id}_last_b) = b;
+            }
+
+            // OFF -> ON: force resend (prevents “flash to white” after tube resets)
+            if (now_on && !prev_on) {
+              id(${dev_id}_force_resend) = true;
+            }
+
+        - script.execute: ${dev_id}_apply_state
+
+interval:
+  - interval: 5s
+    then:
+      - script.execute: ${dev_id}_keepalive
+
+script:
+  - id: ${dev_id}_apply_state
+    mode: restart
+    then:
+      # small debounce so HA can deliver a complete state on ON
+      - delay: 60ms
+      - script.execute: ${dev_id}_push
+
+  - id: ${dev_id}_push
+    mode: restart
+    then:
+      - if:
+          condition:
+            lambda: |-
+              return !id(${dev_id}_is_on);
+          then:
+            - script.execute: ${dev_id}_send_off
+          else:
+            - if:
+                condition:
+                  lambda: |-
+                    return id(${dev_id}_force_resend);
+                then:
+                  - script.execute: ${dev_id}_send_color
+                  - lambda: |-
+                      id(${dev_id}_force_resend) = false;
+                else:
+                  - if:
+                      condition:
+                        lambda: |-
+                          return id(${dev_id}_last_r) != id(${dev_id}_sent_r) ||
+                                 id(${dev_id}_last_g) != id(${dev_id}_sent_g) ||
+                                 id(${dev_id}_last_b) != id(${dev_id}_sent_b);
+                      then:
+                        - script.execute: ${dev_id}_send_color
+
+  - id: ${dev_id}_init
+    then:
+      - ble_client.ble_write:
+          id: ${dev_id}_client
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${char_uuid}
+          value: !lambda |-
+            auto hexval = [](char c) -> uint8_t {
+              if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+              if (c >= 'A' && c <= 'F') return (uint8_t)(c - 'A' + 10);
+              if (c >= 'a' && c <= 'f') return (uint8_t)(c - 'a' + 10);
+              return 0;
+            };
+            auto parse_mac = [&](const std::string &s) -> std::vector<uint8_t> {
+              std::vector<uint8_t> mac; mac.reserve(6);
+              for (size_t i = 0; i + 1 < s.size() && mac.size() < 6;) {
+                if (s[i] == ':' || s[i] == '-') { i++; continue; }
+                mac.push_back((uint8_t)((hexval(s[i]) << 4) | hexval(s[i+1])));
+                i += 2;
+              }
+              while (mac.size() < 6) mac.push_back(0x00);
+              return mac;
+            };
+
+            std::vector<uint8_t> mac = parse_mac("${dev_mac}");
+            std::vector<uint8_t> msg = {0x78,0x9F,0x0C};
+            msg.insert(msg.end(), mac.begin(), mac.end());
+            uint8_t tail[] = {0x01,0x00,0x00,0x00,0x00,0x00};
+            msg.insert(msg.end(), std::begin(tail), std::end(tail));
+            uint8_t cs = 0; for (auto b : msg) cs += b;
+            msg.push_back(cs);
+
+            ESP_LOGD("neewer_${dev_id}", "BLE 9F init len=%u", (unsigned) msg.size());
+            return msg;
+
+  - id: ${dev_id}_keepalive
+    then:
+      - ble_client.ble_write:
+          id: ${dev_id}_client
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${char_uuid}
+          value: !lambda |-
+            auto hexval = [](char c) -> uint8_t {
+              if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+              if (c >= 'A' && c <= 'F') return (uint8_t)(c - 'A' + 10);
+              if (c >= 'a' && c <= 'f') return (uint8_t)(c - 'a' + 10);
+              return 0;
+            };
+            auto parse_mac = [&](const std::string &s) -> std::vector<uint8_t> {
+              std::vector<uint8_t> mac; mac.reserve(6);
+              for (size_t i = 0; i + 1 < s.size() && mac.size() < 6;) {
+                if (s[i] == ':' || s[i] == '-') { i++; continue; }
+                mac.push_back((uint8_t)((hexval(s[i]) << 4) | hexval(s[i+1])));
+                i += 2;
+              }
+              while (mac.size() < 6) mac.push_back(0x00);
+              return mac;
+            };
+
+            std::vector<uint8_t> mac = parse_mac("${dev_mac}");
+            std::vector<uint8_t> msg = {0x78,0x9E,0x06};
+            msg.insert(msg.end(), mac.begin(), mac.end());
+            uint8_t cs = 0; for (auto b : msg) cs += b;
+            msg.push_back(cs);
+
+            return msg;
+
+  - id: ${dev_id}_send_color
+    then:
+      - ble_client.ble_write:
+          id: ${dev_id}_client
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${char_uuid}
+          value: !lambda |-
+            auto hexval = [](char c) -> uint8_t {
+              if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+              if (c >= 'A' && c <= 'F') return (uint8_t)(c - 'A' + 10);
+              if (c >= 'a' && c <= 'f') return (uint8_t)(c - 'a' + 10);
+              return 0;
+            };
+            auto parse_mac = [&](const std::string &s) -> std::vector<uint8_t> {
+              std::vector<uint8_t> mac; mac.reserve(6);
+              for (size_t i = 0; i + 1 < s.size() && mac.size() < 6;) {
+                if (s[i] == ':' || s[i] == '-') { i++; continue; }
+                mac.push_back((uint8_t)((hexval(s[i]) << 4) | hexval(s[i+1])));
+                i += 2;
+              }
+              while (mac.size() < 6) mac.push_back(0x00);
+              return mac;
+            };
+
+            uint8_t r  = id(${dev_id}_last_r);
+            uint8_t g  = id(${dev_id}_last_g);
+            uint8_t b  = id(${dev_id}_last_b);
+            uint8_t cw = 0x00;
+            uint8_t ww = 0x00;
+
+            std::vector<uint8_t> mac = parse_mac("${dev_mac}");
+            std::vector<uint8_t> msg = {0x78,0xA9,0x0E};
+            msg.insert(msg.end(), mac.begin(), mac.end());
+            msg.push_back(0xA8);
+            msg.push_back(0x32);
+            msg.push_back(r);
+            msg.push_back(g);
+            msg.push_back(b);
+            msg.push_back(cw);
+            msg.push_back(ww);
+            msg.push_back(0x00);
+            uint8_t cs = 0; for (auto v : msg) cs += v;
+            msg.push_back(cs);
+
+            id(${dev_id}_sent_r) = r;
+            id(${dev_id}_sent_g) = g;
+            id(${dev_id}_sent_b) = b;
+
+            ESP_LOGD("neewer_${dev_id}", "BLE A9 r=%u g=%u b=%u cw=0 ww=0 cs=%u", r, g, b, cs);
+            return msg;
+
+  - id: ${dev_id}_send_off
+    then:
+      # OFF using 0x90 bri=0 (reliable “power off”)
+      - ble_client.ble_write:
+          id: ${dev_id}_client
+          service_uuid: ${service_uuid}
+          characteristic_uuid: ${char_uuid}
+          value: !lambda |-
+            auto hexval = [](char c) -> uint8_t {
+              if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+              if (c >= 'A' && c <= 'F') return (uint8_t)(c - 'A' + 10);
+              if (c >= 'a' && c <= 'f') return (uint8_t)(c - 'a' + 10);
+              return 0;
+            };
+            auto parse_mac = [&](const std::string &s) -> std::vector<uint8_t> {
+              std::vector<uint8_t> mac; mac.reserve(6);
+              for (size_t i = 0; i + 1 < s.size() && mac.size() < 6;) {
+                if (s[i] == ':' || s[i] == '-') { i++; continue; }
+                mac.push_back((uint8_t)((hexval(s[i]) << 4) | hexval(s[i+1])));
+                i += 2;
+              }
+              while (mac.size() < 6) mac.push_back(0x00);
+              return mac;
+            };
+
+            std::vector<uint8_t> mac = parse_mac("${dev_mac}");
+            std::vector<uint8_t> msg = {0x78,0x90,0x0C};
+            msg.insert(msg.end(), mac.begin(), mac.end());
+            msg.push_back(0x87);
+            msg.push_back(0x00);  // bri = 0
+            msg.push_back(0x37);
+            msg.push_back(0x32);
+            msg.push_back(0x00);
+            msg.push_back(0x00);
+            uint8_t cs = 0; for (auto v : msg) cs += v;
+            msg.push_back(cs);
+
+            ESP_LOGD("neewer_${dev_id}", "BLE 90 off cs=%u", cs);
+            return msg;
