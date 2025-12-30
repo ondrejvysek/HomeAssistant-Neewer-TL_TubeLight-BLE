@@ -309,7 +309,10 @@ script:
             std::vector<uint8_t> msg = {0x78,0xA9,0x0E};
             msg.insert(msg.end(), mac.begin(), mac.end());
             msg.push_back(0xA8);
-            msg.push_back(0x32);
+
+            // brightness percent byte in this frame
+            msg.push_back(0x64);  // 100%
+
             msg.push_back(r);
             msg.push_back(g);
             msg.push_back(b);
@@ -326,6 +329,7 @@ script:
             id(${dev_id}_sent_ww) = ww;
 
             return msg;
+
 
   - id: ${dev_id}_send_off
     then:
