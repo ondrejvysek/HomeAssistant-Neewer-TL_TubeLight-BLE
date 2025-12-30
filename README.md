@@ -1,5 +1,7 @@
 # HomeAssistant Neewer TL TubeLight BLE Control
 
+**WARN: This is still experimental**
+
 This custom component controls Neewer tube lights, tested on TL120C and TL60 RGB
 
 Using ATOM M5 as BLE gateway
@@ -12,7 +14,6 @@ You get the standard HA UI, including the **color picker**, brightness slider, a
 - On/Off
 - Brightness
 - RGB color control
-- Cold/Warm white control (CW/WW)
 - Multiple tubes grouped into a single HA light entity
 - Keepalive handling
 
