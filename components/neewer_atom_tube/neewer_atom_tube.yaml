@@ -1,7 +1,4 @@
 # components/neewer_atom_tube/neewer_atom_tube.yaml
-# Brightness + Color brightness handled by converting LightColorValues -> RGBWW outputs
-# Dimming is done by scaling RGBWW values (via as_rgbww), NOT by 0x90 brightness frame
-# OFF uses 0x90 bri=0 (optional but reliable)
 
 substitutions:
   # expected vars from remote package include:
@@ -36,6 +33,36 @@ globals:
     type: uint8_t
     restore_value: true
     initial_value: "0"
+
+  # raw (unscaled) channels tracking to guard against "reset to white"
+  - id: ${dev_id}_raw_r
+    type: float
+    restore_value: true
+    initial_value: "1.0"
+  - id: ${dev_id}_raw_g
+    type: float
+    restore_value: true
+    initial_value: "1.0"
+  - id: ${dev_id}_raw_b
+    type: float
+    restore_value: true
+    initial_value: "1.0"
+  - id: ${dev_id}_raw_cw
+    type: float
+    restore_value: true
+    initial_value: "0.0"
+  - id: ${dev_id}_raw_ww
+    type: float
+    restore_value: true
+    initial_value: "0.0"
+  - id: ${dev_id}_prev_bri
+    type: float
+    restore_value: false
+    initial_value: "1.0"
+  - id: ${dev_id}_prev_cbri
+    type: float
+    restore_value: false
+    initial_value: "1.0"
 
   # what we already sent (dedup)
   - id: ${dev_id}_sent_r
@@ -132,13 +159,56 @@ light:
             id(${dev_id}_was_on) = now_on;
             id(${dev_id}_is_on) = now_on;
 
-            // Convert the full state to effective RGBWW outputs.
-            // This includes:
-            // - master brightness
-            // - color brightness (HA "Color brightness" slider)
-            // - correct mixing rules for rgbww
-            float r_f=0, g_f=0, b_f=0, cw_f=0, ww_f=0;
-            cv.as_rgbww(&r_f, &g_f, &b_f, &cw_f, &ww_f, 0.0f, false);
+            // Read scalars
+            float bri  = cv.get_brightness();
+            float cbri = cv.get_color_brightness();
+
+            // Read raw channels (0..1). These are NOT scaled by brightness.
+            float r_raw  = cv.get_red();
+            float g_raw  = cv.get_green();
+            float b_raw  = cv.get_blue();
+            float cw_raw = cv.get_cold_white();
+            float ww_raw = cv.get_warm_white();
+
+            // Guard: sometimes brightness changes can come with RGB snapping to 1,1,1 (white)
+            // while CW/WW remain 0. If we previously had a non-white RGB, keep it.
+            bool prev_rgb_nonwhite =
+              (fabsf(id(${dev_id}_raw_r) - id(${dev_id}_raw_g)) > 0.02f) ||
+              (fabsf(id(${dev_id}_raw_r) - id(${dev_id}_raw_b)) > 0.02f);
+
+            bool snapped_to_white =
+              (r_raw > 0.98f && g_raw > 0.98f && b_raw > 0.98f) &&
+              (cw_raw < 0.01f && ww_raw < 0.01f);
+
+            bool brightness_changed = fabsf(bri - id(${dev_id}_prev_bri)) > 0.001f;
+
+            bool suspect_white_reset = prev_on && now_on && brightness_changed && prev_rgb_nonwhite && snapped_to_white;
+
+            if (suspect_white_reset) {
+              // keep previous raw RGB/CW/WW
+              r_raw  = id(${dev_id}_raw_r);
+              g_raw  = id(${dev_id}_raw_g);
+              b_raw  = id(${dev_id}_raw_b);
+              cw_raw = id(${dev_id}_raw_cw);
+              ww_raw = id(${dev_id}_raw_ww);
+            } else {
+              // accept new raw
+              id(${dev_id}_raw_r)  = r_raw;
+              id(${dev_id}_raw_g)  = g_raw;
+              id(${dev_id}_raw_b)  = b_raw;
+              id(${dev_id}_raw_cw) = cw_raw;
+              id(${dev_id}_raw_ww) = ww_raw;
+            }
+
+            id(${dev_id}_prev_bri)  = bri;
+            id(${dev_id}_prev_cbri) = cbri;
+
+            // Scale exactly like ESPHome: RGB uses bri * cbri, CW/WW uses bri.
+            float r_f  = now_on ? (r_raw  * bri * cbri) : 0.0f;
+            float g_f  = now_on ? (g_raw  * bri * cbri) : 0.0f;
+            float b_f  = now_on ? (b_raw  * bri * cbri) : 0.0f;
+            float cw_f = now_on ? (cw_raw * bri)        : 0.0f;
+            float ww_f = now_on ? (ww_raw * bri)        : 0.0f;
 
             auto clamp255 = [](float v) -> uint8_t {
               if (v <= 0.0f) return 0;
@@ -151,6 +221,15 @@ light:
             uint8_t b  = clamp255(b_f);
             uint8_t cw = clamp255(cw_f);
             uint8_t ww = clamp255(ww_f);
+
+            ESP_LOGD("neewer_${dev_id}",
+                     "STATE on=%d mode=%u bri=%.3f cbri=%.3f raw=(%.3f %.3f %.3f %.3f %.3f) suspect=%d eff=(%u %u %u %u %u)",
+                     (int) now_on,
+                     (unsigned) cv.get_color_mode(),
+                     bri, cbri,
+                     r_raw, g_raw, b_raw, cw_raw, ww_raw,
+                     (int) suspect_white_reset,
+                     r, g, b, cw, ww);
 
             // Keep last color even when turning OFF (so we can restore fast on ON).
             if (now_on) {
@@ -177,7 +256,6 @@ script:
   - id: ${dev_id}_apply_state
     mode: restart
     then:
-      # small debounce so HA can deliver a complete state on ON
       - delay: 60ms
       - script.execute: ${dev_id}_push
 
@@ -242,6 +320,13 @@ script:
             msg.insert(msg.end(), std::begin(tail), std::end(tail));
             uint8_t cs = 0; for (auto b : msg) cs += b;
             msg.push_back(cs);
+
+            // log
+            char buf[96];
+            size_t n = 0;
+            for (auto v : msg) n += snprintf(buf + n, sizeof(buf) - n, "%02X ", v);
+            ESP_LOGD("neewer_${dev_id}", "BLE TX INIT (%u): %s", (unsigned) msg.size(), buf);
+
             return msg;
 
   - id: ${dev_id}_keepalive
@@ -273,6 +358,12 @@ script:
             msg.insert(msg.end(), mac.begin(), mac.end());
             uint8_t cs = 0; for (auto b : msg) cs += b;
             msg.push_back(cs);
+
+            char buf[96];
+            size_t n = 0;
+            for (auto v : msg) n += snprintf(buf + n, sizeof(buf) - n, "%02X ", v);
+            ESP_LOGD("neewer_${dev_id}", "BLE TX KEEPALIVE (%u): %s", (unsigned) msg.size(), buf);
+
             return msg;
 
   - id: ${dev_id}_send_color
@@ -309,18 +400,13 @@ script:
             std::vector<uint8_t> msg = {0x78,0xA9,0x0E};
             msg.insert(msg.end(), mac.begin(), mac.end());
             msg.push_back(0xA8);
-
-            // 0xA9 frame contains a "brightness percent" byte.
-            // Keep it at 100% so dimming is ONLY done by scaling RGBWW (as_rgbww()).
-            msg.push_back(0x64);  // 100%
-
+            msg.push_back(0x32);
             msg.push_back(r);
             msg.push_back(g);
             msg.push_back(b);
             msg.push_back(cw);
             msg.push_back(ww);
             msg.push_back(0x00);
-
             uint8_t cs = 0; for (auto v : msg) cs += v;
             msg.push_back(cs);
 
@@ -330,13 +416,16 @@ script:
             id(${dev_id}_sent_cw) = cw;
             id(${dev_id}_sent_ww) = ww;
 
+            char buf[96];
+            size_t n = 0;
+            for (auto v : msg) n += snprintf(buf + n, sizeof(buf) - n, "%02X ", v);
+            ESP_LOGD("neewer_${dev_id}", "BLE TX COLOR rgbww=(%u %u %u %u %u) (%u): %s",
+                     r, g, b, cw, ww, (unsigned) msg.size(), buf);
+
             return msg;
-
-
 
   - id: ${dev_id}_send_off
     then:
-      # OFF using 0x90 bri=0 (reliable “power off”)
       - ble_client.ble_write:
           id: ${dev_id}_client
           service_uuid: ${service_uuid}
@@ -370,4 +459,10 @@ script:
             msg.push_back(0x00);
             uint8_t cs = 0; for (auto v : msg) cs += v;
             msg.push_back(cs);
+
+            char buf[96];
+            size_t n = 0;
+            for (auto v : msg) n += snprintf(buf + n, sizeof(buf) - n, "%02X ", v);
+            ESP_LOGD("neewer_${dev_id}", "BLE TX OFF (%u): %s", (unsigned) msg.size(), buf);
+
             return msg;
