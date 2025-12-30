@@ -1,8 +1,10 @@
-# neewer_atom_tube.yaml
-# Fix: po OFF→ON vždy znovu pošli poslední barvu (jinak se trubka resetne na bílou)
+# components/neewer_atom_tube/neewer_atom_tube.yaml
+# Brightness + Color brightness handled by converting LightColorValues -> RGBWW outputs
+# Dimming is done by scaling RGBWW values (via as_rgbww), NOT by 0x90 brightness frame
+# OFF uses 0x90 bri=0 (optional but reliable)
 
 substitutions:
-  # očekávané vars z include:
+  # expected vars from remote package include:
   # dev_id, dev_name, dev_mac, service_uuid, char_uuid
 
 ble_client:
@@ -13,6 +15,7 @@ ble_client:
         - script.execute: ${dev_id}_init
 
 globals:
+  # last EFFECTIVE values we want to send (already includes brightness + color_brightness)
   - id: ${dev_id}_last_r
     type: uint8_t
     restore_value: true
@@ -34,17 +37,7 @@ globals:
     restore_value: true
     initial_value: "0"
 
-  - id: ${dev_id}_last_bri
-    type: uint8_t
-    restore_value: true
-    initial_value: "50"
-
-  - id: ${dev_id}_saved_bri
-    type: uint8_t
-    restore_value: true
-    initial_value: "50"
-
-  # co už jsme poslali (pro anti-flicker / dedup)
+  # what we already sent (dedup)
   - id: ${dev_id}_sent_r
     type: uint8_t
     restore_value: false
@@ -65,22 +58,23 @@ globals:
     type: uint8_t
     restore_value: false
     initial_value: "255"
-  - id: ${dev_id}_sent_bri
-    type: uint8_t
-    restore_value: false
-    initial_value: "255"
 
-  # OFF→ON detekce
+  # state tracking
+  - id: ${dev_id}_is_on
+    type: bool
+    restore_value: false
+    initial_value: "false"
   - id: ${dev_id}_was_on
     type: bool
     restore_value: false
     initial_value: "false"
-  - id: ${dev_id}_force_resend_color
+  - id: ${dev_id}_force_resend
     type: bool
     restore_value: false
     initial_value: "false"
 
 output:
+  # dummy outputs only to satisfy rgbww platform
   - platform: template
     id: ${dev_id}_out_r
     type: float
@@ -133,43 +127,43 @@ light:
         - lambda: |-
             auto cv = id(${dev_id}_light).current_values;
 
-            bool is_on = cv.get_state();
+            bool now_on = cv.is_on();
             bool prev_on = id(${dev_id}_was_on);
-            id(${dev_id}_was_on) = is_on;
+            id(${dev_id}_was_on) = now_on;
+            id(${dev_id}_is_on) = now_on;
 
-            // kanály 0..1 -> 0..255
-            uint8_t r  = (uint8_t) lroundf(cv.get_red()        * 255.0f);
-            uint8_t g  = (uint8_t) lroundf(cv.get_green()      * 255.0f);
-            uint8_t b  = (uint8_t) lroundf(cv.get_blue()       * 255.0f);
-            uint8_t cw = (uint8_t) lroundf(cv.get_cold_white() * 255.0f);
-            uint8_t ww = (uint8_t) lroundf(cv.get_warm_white() * 255.0f);
+            // Convert the full state to effective RGBWW outputs.
+            // This includes:
+            // - master brightness
+            // - color brightness (HA "Color brightness" slider)
+            // - correct mixing rules for rgbww
+            float r_f=0, g_f=0, b_f=0, cw_f=0, ww_f=0;
+            cv.as_rgbww(&r_f, &g_f, &b_f, &cw_f, &ww_f, 0.0f, false);
 
-            id(${dev_id}_last_r)  = r;
-            id(${dev_id}_last_g)  = g;
-            id(${dev_id}_last_b)  = b;
-            id(${dev_id}_last_cw) = cw;
-            id(${dev_id}_last_ww) = ww;
+            auto clamp255 = [](float v) -> uint8_t {
+              if (v <= 0.0f) return 0;
+              if (v >= 1.0f) return 255;
+              return (uint8_t) lroundf(v * 255.0f);
+            };
 
-            // brightness 0..1 -> 0..100
-            float br = cv.get_brightness();
-            uint8_t bri = (uint8_t) lroundf(br * 100.0f);
-            if (bri > 100) bri = 100;
+            uint8_t r  = clamp255(r_f);
+            uint8_t g  = clamp255(g_f);
+            uint8_t b  = clamp255(b_f);
+            uint8_t cw = clamp255(cw_f);
+            uint8_t ww = clamp255(ww_f);
 
-            if (!is_on) {
-              id(${dev_id}_last_bri) = 0;
-            } else {
-              if (bri == 0) {
-                uint8_t fallback = id(${dev_id}_saved_bri);
-                id(${dev_id}_last_bri) = (fallback == 0) ? (uint8_t)50 : fallback;
-              } else {
-                id(${dev_id}_last_bri) = bri;
-                id(${dev_id}_saved_bri) = bri;
-              }
+            // Keep last color even when turning OFF (so we can restore fast on ON).
+            if (now_on) {
+              id(${dev_id}_last_r)  = r;
+              id(${dev_id}_last_g)  = g;
+              id(${dev_id}_last_b)  = b;
+              id(${dev_id}_last_cw) = cw;
+              id(${dev_id}_last_ww) = ww;
             }
 
-            // Když jdeme OFF -> ON, vynutíme resend barvy
-            if (is_on && !prev_on) {
-              id(${dev_id}_force_resend_color) = true;
+            // OFF -> ON: force resend (prevents “flash to white” after tube resets)
+            if (now_on && !prev_on) {
+              id(${dev_id}_force_resend) = true;
             }
 
         - script.execute: ${dev_id}_apply_state
@@ -183,38 +177,29 @@ script:
   - id: ${dev_id}_apply_state
     mode: restart
     then:
-      - delay: 40ms
+      # small debounce so HA can deliver a complete state on ON
+      - delay: 60ms
       - script.execute: ${dev_id}_push
 
   - id: ${dev_id}_push
     mode: restart
     then:
-      # OFF -> pošli jen brightness=0 (barvu neřeš)
       - if:
           condition:
             lambda: |-
-              return id(${dev_id}_last_bri) == 0;
+              return !id(${dev_id}_is_on);
           then:
-            - if:
-                condition:
-                  lambda: |-
-                    return id(${dev_id}_sent_bri) != 0;
-                then:
-                  - script.execute: ${dev_id}_send_brightness
+            - script.execute: ${dev_id}_send_off
           else:
-            # ON -> pokud je to OFF→ON, pošli nejdřív brightness, pak barvu (vždy)
             - if:
                 condition:
                   lambda: |-
-                    return id(${dev_id}_force_resend_color);
+                    return id(${dev_id}_force_resend);
                 then:
                   - script.execute: ${dev_id}_send_color
                   - lambda: |-
-                      id(${dev_id}_force_resend_color) = false;
-                  - delay: 90ms
-                  - script.execute: ${dev_id}_send_brightness                    
+                      id(${dev_id}_force_resend) = false;
                 else:
-                  # běžné změny: color jen když se změnil
                   - if:
                       condition:
                         lambda: |-
@@ -225,14 +210,6 @@ script:
                                  id(${dev_id}_last_ww) != id(${dev_id}_sent_ww);
                       then:
                         - script.execute: ${dev_id}_send_color
-
-                  # brightness jen když se změnil
-                  - if:
-                      condition:
-                        lambda: |-
-                          return id(${dev_id}_last_bri) != id(${dev_id}_sent_bri);
-                      then:
-                        - script.execute: ${dev_id}_send_brightness
 
   - id: ${dev_id}_init
     then:
@@ -350,8 +327,9 @@ script:
 
             return msg;
 
-  - id: ${dev_id}_send_brightness
+  - id: ${dev_id}_send_off
     then:
+      # OFF using 0x90 bri=0 (reliable “power off”)
       - ble_client.ble_write:
           id: ${dev_id}_client
           service_uuid: ${service_uuid}
@@ -374,20 +352,15 @@ script:
               return mac;
             };
 
-            uint8_t bri = id(${dev_id}_last_bri);
-
             std::vector<uint8_t> mac = parse_mac("${dev_mac}");
             std::vector<uint8_t> msg = {0x78,0x90,0x0C};
             msg.insert(msg.end(), mac.begin(), mac.end());
             msg.push_back(0x87);
-            msg.push_back(bri);
+            msg.push_back(0x00);  // bri = 0
             msg.push_back(0x37);
             msg.push_back(0x32);
             msg.push_back(0x00);
             msg.push_back(0x00);
             uint8_t cs = 0; for (auto v : msg) cs += v;
             msg.push_back(cs);
-
-            id(${dev_id}_sent_bri) = bri;
-
             return msg;
