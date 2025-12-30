@@ -310,7 +310,8 @@ script:
             msg.insert(msg.end(), mac.begin(), mac.end());
             msg.push_back(0xA8);
 
-            // brightness percent byte in this frame
+            // 0xA9 frame contains a "brightness percent" byte.
+            // Keep it at 100% so dimming is ONLY done by scaling RGBWW (as_rgbww()).
             msg.push_back(0x64);  // 100%
 
             msg.push_back(r);
@@ -319,6 +320,7 @@ script:
             msg.push_back(cw);
             msg.push_back(ww);
             msg.push_back(0x00);
+
             uint8_t cs = 0; for (auto v : msg) cs += v;
             msg.push_back(cs);
 
@@ -329,6 +331,7 @@ script:
             id(${dev_id}_sent_ww) = ww;
 
             return msg;
+
 
 
   - id: ${dev_id}_send_off
